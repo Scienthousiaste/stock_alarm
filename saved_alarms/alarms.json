@@ -1,0 +1,17 @@
+{
+    "alarms": [
+        {
+            "ticker": "TSLA",
+            "up_price": "200",
+            "down_price": "190"
+        },
+        {
+            "ticker": "DASH",
+            "up_price": "55"
+        },
+        {
+            "ticker": "NVDA",
+            "up_price": "230"
+        }
+    ]
+}

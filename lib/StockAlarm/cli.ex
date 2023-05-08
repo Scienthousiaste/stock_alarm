@@ -6,33 +6,12 @@ defmodule StockAlarm.CLI do
   @min_time 30_000
   @max_time 90_000
 
+  defp to_float_or_nil(nil), do: nil
+  defp to_float_or_nil(price), do: String.to_float(price)
+
   def main(_args \\ []) do
     read_file_and_parse()
-    |> decouple_up_down_and_parse_prices()
     |> run()
-  end
-
-  def decouple_up_down_and_parse_prices(alarms) do
-    alarms
-    |> Enum.reduce([], fn alarm, acc ->
-      case alarm do
-        %{ticker: t, down_price: down, up_price: up} when not is_nil(down) and not is_nil(up) ->
-          acc ++
-            [
-              %{ticker: t, down_price: String.to_float(down)},
-              %{ticker: t, up_price: String.to_float(up)}
-            ]
-
-        %{ticker: t, down_price: down, up_price: up} when is_nil(down) and not is_nil(up) ->
-          [%{ticker: t, up_price: String.to_float(up)} | acc]
-
-        %{ticker: t, down_price: down, up_price: up} when is_nil(up) and not is_nil(down) ->
-          [%{ticker: t, down_price: String.to_float(down)} | acc]
-
-        _ ->
-          acc
-      end
-    end)
   end
 
   def read_file_and_parse do
@@ -57,11 +36,13 @@ defmodule StockAlarm.CLI do
     {:error, "The alarms.json file doesn't contain alarms"}
   end
 
+  @spec parse_alarm(map) :: %{down_price: nil | float, ticker: any, up_price: nil | float}
   def parse_alarm(alarm) do
     %{
       ticker: Map.get(alarm, "ticker"),
-      up_price: Map.get(alarm, "up_price"),
-      down_price: Map.get(alarm, "down_price")
+      up_price: Map.get(alarm, "up_price") |> to_float_or_nil,
+      down_price: Map.get(alarm, "down_price") |> to_float_or_nil,
+      change_step: Map.get(alarm, "change_step") |> to_float_or_nil
     }
   end
 
@@ -73,36 +54,64 @@ defmodule StockAlarm.CLI do
     end
   end
 
-  def launch_alarm(%{down_price: target_price, ticker: ticker} = alarm) do
-    current_price = StockAlarm.current_price(ticker)
-    sound_alarm_if(current_price, current_price < target_price, alarm)
+  def maybe_modify_alarm(%{up_price: up_price, change_step: change_step} = alarm, :up) when not is_nil(change_step) do
+    Map.put(alarm, :up_price, up_price + change_step)
   end
 
-  def launch_alarm(%{up_price: target_price, ticker: ticker} = alarm) do
-    current_price = StockAlarm.current_price(ticker)
-    sound_alarm_if(current_price, current_price > target_price, alarm)
+  def maybe_modify_alarm(%{down_price: down_price, change_step: change_step} = alarm, :down) when not is_nil(change_step) do
+    Map.put(alarm, :down_price, down_price - change_step)
   end
 
-  def sound_alarm_if(current_price, should_alert?, alarm) do
-    if should_alert? do
-      if Map.get(alarm, :down_price) do
-        IO.puts("#{alarm.ticker} is worth #{current_price}, which is under #{alarm.down_price}")
-      else
-        IO.puts("#{alarm.ticker} is worth #{current_price}, which is OVER #{alarm.up_price}")
-      end
+  def maybe_modify_alarm(alarm, _), do: alarm
 
-      path =
-        __ENV__.file
-        |> Path.dirname()
-        |> Path.dirname()
-        |> Path.dirname()
-        |> Path.join("/sounds/alert.mp3")
+  def launch_alarm(%{down_price: down_price, up_price: up_price, ticker: ticker} = alarm) do
+    current_price = StockAlarm.current_price(ticker)
 
-      System.cmd("afplay", [path])
-    else
-      IO.puts("#{alarm.ticker} is worth #{current_price}")
-    end
+    {alert_down?, alert_up?} =
+      {!is_nil(down_price) && current_price < down_price,
+       !is_nil(up_price) && current_price > up_price}
 
+    sound_alarm_if(current_price, alert_down?, alert_up?, alarm)
+  end
+
+  def play_sound(:down_sound), do: do_play_sound("down")
+  def play_sound(:up_sound), do: do_play_sound("up")
+
+  def do_play_sound(sound) do
+    path =
+      __ENV__.file
+      |> Path.dirname()
+      |> Path.dirname()
+      |> Path.dirname()
+      |> Path.join("/sounds/#{sound}.mp3")
+
+    System.cmd("afplay", [path])
+  end
+
+  def sound_alarm_if(current_price, true = _alert_down?, _alert_up?, alarm) do
+    IO.puts("#{alarm.ticker} is worth #{current_price}, which is under #{alarm.down_price}")
+    play_sound(:down_sound)
+
+    alarm
+    |> maybe_modify_alarm(:down)
+    |> wait_before_next_alarm
+  end
+
+  def sound_alarm_if(current_price, false = _alert_down?, true = _alert_up?, alarm) do
+    IO.puts("#{alarm.ticker} is worth #{current_price}, which is OVER #{alarm.up_price}")
+    play_sound(:up_sound)
+
+    alarm
+    |> maybe_modify_alarm(:up)
+    |> wait_before_next_alarm
+  end
+
+  def sound_alarm_if(current_price, false = _alert_down?, false = _alert_up?, alarm) do
+    IO.puts("#{alarm.ticker} is worth #{current_price}")
+    wait_before_next_alarm(alarm)
+  end
+
+  def wait_before_next_alarm(alarm) do
     Enum.random(@min_time..@max_time)
     |> Process.sleep()
 

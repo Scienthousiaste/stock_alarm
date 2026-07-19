@@ -2,9 +2,19 @@ defmodule StockAlarm.CLI do
   @moduledoc false
   # mix escript.build && ./stock_alarm
 
-  @alarm_file_path "saved_alarms/alarms.json"
   @min_time 30_000
   @max_time 90_000
+
+  defp base_dir do
+    :escript.script_name()
+    |> List.to_string()
+    |> Path.expand()
+    |> Path.dirname()
+  rescue
+    _ -> File.cwd!()
+  end
+
+  defp alarm_file_path, do: Path.join(base_dir(), "saved_alarms/alarms.json")
 
   defp to_float_or_nil(nil), do: nil
   defp to_float_or_nil(price) when is_number(price), do: price * 1.0
@@ -22,14 +32,16 @@ defmodule StockAlarm.CLI do
   end
 
   def read_file_and_parse do
-    case File.read(@alarm_file_path) do
+    path = alarm_file_path()
+
+    case File.read(path) do
       {:ok, binary} ->
         binary
         |> Jason.decode!()
         |> parse_alarms()
 
       {:error, error} ->
-        {:error, error}
+        {:error, "could not read #{path}: #{error}"}
     end
   end
 
@@ -90,12 +102,7 @@ defmodule StockAlarm.CLI do
   def play_sound(:up_sound), do: do_play_sound("up")
 
   def do_play_sound(sound) do
-    path =
-      __ENV__.file
-      |> Path.dirname()
-      |> Path.dirname()
-      |> Path.dirname()
-      |> Path.join("/sounds/#{sound}.mp3")
+    path = Path.join(base_dir(), "sounds/#{sound}.mp3")
 
     System.cmd("afplay", [path])
   end

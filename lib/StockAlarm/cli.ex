@@ -7,7 +7,14 @@ defmodule StockAlarm.CLI do
   @max_time 90_000
 
   defp to_float_or_nil(nil), do: nil
-  defp to_float_or_nil(price), do: String.to_float(price)
+  defp to_float_or_nil(price) when is_number(price), do: price * 1.0
+
+  defp to_float_or_nil(price) do
+    case Float.parse(price) do
+      {value, _} -> value
+      :error -> nil
+    end
+  end
 
   def main(_args \\ []) do
     read_file_and_parse()
@@ -65,13 +72,18 @@ defmodule StockAlarm.CLI do
   def maybe_modify_alarm(alarm, _), do: alarm
 
   def launch_alarm(%{down_price: down_price, up_price: up_price, ticker: ticker} = alarm) do
-    current_price = StockAlarm.current_price(ticker)
+    case StockAlarm.current_price(ticker) do
+      nil ->
+        IO.puts("Could not fetch the price of #{ticker}, will retry")
+        wait_before_next_alarm(alarm)
 
-    {alert_down?, alert_up?} =
-      {!is_nil(down_price) && current_price < down_price,
-       !is_nil(up_price) && current_price > up_price}
+      current_price ->
+        {alert_down?, alert_up?} =
+          {!is_nil(down_price) && current_price < down_price,
+           !is_nil(up_price) && current_price > up_price}
 
-    sound_alarm_if(current_price, alert_down?, alert_up?, alarm)
+        sound_alarm_if(current_price, alert_down?, alert_up?, alarm)
+    end
   end
 
   def play_sound(:down_sound), do: do_play_sound("down")
@@ -127,8 +139,10 @@ defmodule StockAlarm.CLI do
   end
 
   def run(alarms) do
-    Enum.each(alarms, fn alarm ->
-      Kernel.spawn(StockAlarm.CLI, :launch_alarm, [alarm])
+    alarms
+    |> Enum.map(fn alarm ->
+      Task.async(StockAlarm.CLI, :launch_alarm, [alarm])
     end)
+    |> Task.await_many(:infinity)
   end
 end

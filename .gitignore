@@ -3,3 +3,4 @@ priv
 deps
 _build
 stock_alarm
+.tool-versions

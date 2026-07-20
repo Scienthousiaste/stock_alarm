@@ -1,11 +1,8 @@
 defmodule StockAlarm.CLI do
   @moduledoc false
-  # mix escript.build && ./stock_alarm
+  # mix escript.build && ./stock_alarm [--silent]
 
-  @min_time 30_000
-  @max_time 90_000
-
-  defp base_dir do
+  def base_dir do
     :escript.script_name()
     |> List.to_string()
     |> Path.expand()
@@ -26,9 +23,11 @@ defmodule StockAlarm.CLI do
     end
   end
 
-  def main(_args \\ []) do
+  def main(args \\ []) do
+    {opts, _argv, _errors} = OptionParser.parse(args, strict: [silent: :boolean], aliases: [s: :silent])
+
     read_file_and_parse()
-    |> run()
+    |> run(opts)
   end
 
   def read_file_and_parse do
@@ -73,108 +72,57 @@ defmodule StockAlarm.CLI do
     end
   end
 
-  def maybe_modify_alarm(%{up_price: up_price, change_step: change_step} = alarm, :up) when not is_nil(change_step) do
-    Map.put(alarm, :up_price, up_price + change_step)
-  end
-
-  def maybe_modify_alarm(%{down_price: down_price, change_step: change_step} = alarm, :down) when not is_nil(change_step) do
-    Map.put(alarm, :down_price, down_price - change_step)
-  end
-
-  def maybe_modify_alarm(alarm, _), do: alarm
-
-  def launch_alarm(%{down_price: down_price, up_price: up_price, ticker: ticker} = alarm) do
-    case StockAlarm.current_quote(ticker) do
-      nil ->
-        IO.puts("#{timestamp()} - Could not fetch the price of #{ticker}, will retry")
-        wait_before_next_alarm(alarm)
-
-      %{price: current_price} = stock_quote ->
-        {alert_down?, alert_up?} =
-          {!is_nil(down_price) && current_price < down_price,
-           !is_nil(up_price) && current_price > up_price}
-
-        sound_alarm_if(stock_quote, alert_down?, alert_up?, alarm)
-    end
-  end
-
-  def play_sound(:down_sound), do: do_play_sound("down")
-  def play_sound(:up_sound), do: do_play_sound("up")
-
-  def do_play_sound(sound) do
-    path = Path.join(base_dir(), "sounds/#{sound}.mp3")
-
-    System.cmd("afplay", [path])
-  end
-
-  def sound_alarm_if(stock_quote, true = _alert_down?, _alert_up?, alarm) do
-    IO.puts("#{format_quote(alarm.ticker, stock_quote)}, which is under #{alarm.down_price}")
-    play_sound(:down_sound)
-
-    alarm
-    |> maybe_modify_alarm(:down)
-    |> wait_before_next_alarm
-  end
-
-  def sound_alarm_if(stock_quote, false = _alert_down?, true = _alert_up?, alarm) do
-    IO.puts("#{format_quote(alarm.ticker, stock_quote)}, which is OVER #{alarm.up_price}")
-    play_sound(:up_sound)
-
-    alarm
-    |> maybe_modify_alarm(:up)
-    |> wait_before_next_alarm
-  end
-
-  def sound_alarm_if(stock_quote, false = _alert_down?, false = _alert_up?, alarm) do
-    IO.puts(format_quote(alarm.ticker, stock_quote))
-    wait_before_next_alarm(alarm)
-  end
-
-  # "14:32 - AAPL is worth 212.43 (+0.63%)", price green on gain, red on loss.
-  defp format_quote(ticker, %{price: price, change_percent: percent}) do
-    "#{timestamp()} - #{ticker} is worth #{colorize(price, percent)}#{percent_suffix(percent)}"
-  end
-
-  defp colorize(price, nil), do: "#{price}"
-
-  defp colorize(price, percent) do
-    color = if percent < 0, do: IO.ANSI.red(), else: IO.ANSI.green()
-    "#{color}#{price}#{IO.ANSI.reset()}"
-  end
-
-  defp percent_suffix(nil), do: ""
-
-  defp percent_suffix(percent) do
-    sign = if percent < 0, do: "", else: "+"
-    " (#{sign}#{:erlang.float_to_binary(percent, decimals: 2)}%)"
-  end
-
-  defp timestamp do
-    "Europe/Paris"
-    |> DateTime.now!(Tz.TimeZoneDatabase)
-    |> Calendar.strftime("%H:%M")
-  end
-
-  def wait_before_next_alarm(alarm) do
-    Enum.random(@min_time..@max_time)
-    |> Process.sleep()
-
-    launch_alarm(alarm)
-  end
-
-  def run({:error, error}) do
+  def run({:error, error}, _opts) do
     IO.puts("The following error occured: #{error}")
   end
 
-  def run(nil) do
+  def run(nil, _opts) do
     IO.puts("Could not parse the alarms.")
   end
 
-  def run(alarms) do
-    alarms
-    |> Enum.map(fn alarm ->
-      Task.async(StockAlarm.CLI, :launch_alarm, [alarm])
-    end)
-    |> Task.await_many(:infinity)
+  def run(alarms, opts) do
+    silent? = Keyword.get(opts, :silent, false)
+
+    workers =
+      Enum.map(alarms, fn alarm ->
+        Supervisor.child_spec({StockAlarm.AlarmWorker, alarm}, id: {StockAlarm.AlarmWorker, alarm.ticker})
+      end)
+
+    # Crashed workers always restart, backing off 30s more after each
+    # consecutive crash (see AlarmWorker/RestartTracker) — never give up.
+    {:ok, _sup} =
+      Supervisor.start_link(
+        [{StockAlarm.Settings, silent: silent?}, StockAlarm.RestartTracker | workers],
+        strategy: :one_for_one,
+        max_restarts: 1_000_000_000,
+        max_seconds: 1
+      )
+
+    IO.puts("Silent mode #{on_off(silent?)} - press 's' + Enter to toggle, 'q' + Enter to quit.")
+    listen_for_commands()
   end
+
+  defp listen_for_commands do
+    case IO.gets("") do
+      line when is_binary(line) ->
+        line |> String.trim() |> handle_command()
+        listen_for_commands()
+
+      _eof_or_error ->
+        # stdin is closed (e.g. running in the background): keep the alarms alive.
+        Process.sleep(:infinity)
+    end
+  end
+
+  defp handle_command("s") do
+    silent? = StockAlarm.Settings.toggle_silent()
+    IO.puts("#{StockAlarm.AlarmWorker.timestamp()} - Silent mode #{on_off(silent?)}")
+  end
+
+  defp handle_command("q"), do: System.halt(0)
+  defp handle_command(""), do: :ok
+  defp handle_command(_), do: IO.puts("Commands: s = toggle silent mode, q = quit")
+
+  defp on_off(true), do: "ON"
+  defp on_off(false), do: "OFF"
 end

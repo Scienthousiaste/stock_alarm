@@ -27,7 +27,8 @@ defmodule StockAlarm.MixProject do
     [
       {:httpoison, "~> 2.0"},
       {:floki, "~> 0.34.0"},
-      {:jason, "~> 1.4"}
+      {:jason, "~> 1.4"},
+      {:tz, "~> 0.28"}
     ]
   end
 end

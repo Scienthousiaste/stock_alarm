@@ -1,24 +1,23 @@
 {
-    "alarms": [
-        {
-            "ticker": "TSLA",
-            "up_price": "207.0"
-        },
-        {
+    "alarms": [{
+            "ticker": "CVNA",
+            "up_price": "68",
+            "down_price": "64",
+            "change_step": "0.5"
+        }, {
             "ticker": "DASH",
-            "up_price": "54.5"
-        },
-        {
-            "ticker": "NVDA",
-            "up_price": "238.0"
-        },
-        {
-            "ticker": "BYND",
-            "up_price": "18.5"
-        },
-        {
-            "ticker": "^GSPC",
-            "up_price": "4000.0"
+            "up_price": "188",
+            "down_price": "180",
+            "change_step": "1"
+        }, {
+            "ticker": "GC=F",
+            "up_price": "4020",
+            "down_price": "4000",
+            "change_step": "5"
+        }, {
+            "ticker": "CL=F",
+            "up_price": "84",
+            "down_price": "82",
+            "change_step": "0.5"
         }
-    ]
-}
+]}

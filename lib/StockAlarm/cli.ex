@@ -84,17 +84,17 @@ defmodule StockAlarm.CLI do
   def maybe_modify_alarm(alarm, _), do: alarm
 
   def launch_alarm(%{down_price: down_price, up_price: up_price, ticker: ticker} = alarm) do
-    case StockAlarm.current_price(ticker) do
+    case StockAlarm.current_quote(ticker) do
       nil ->
-        IO.puts("Could not fetch the price of #{ticker}, will retry")
+        IO.puts("#{timestamp()} - Could not fetch the price of #{ticker}, will retry")
         wait_before_next_alarm(alarm)
 
-      current_price ->
+      %{price: current_price} = stock_quote ->
         {alert_down?, alert_up?} =
           {!is_nil(down_price) && current_price < down_price,
            !is_nil(up_price) && current_price > up_price}
 
-        sound_alarm_if(current_price, alert_down?, alert_up?, alarm)
+        sound_alarm_if(stock_quote, alert_down?, alert_up?, alarm)
     end
   end
 
@@ -107,8 +107,8 @@ defmodule StockAlarm.CLI do
     System.cmd("afplay", [path])
   end
 
-  def sound_alarm_if(current_price, true = _alert_down?, _alert_up?, alarm) do
-    IO.puts("#{alarm.ticker} is worth #{current_price}, which is under #{alarm.down_price}")
+  def sound_alarm_if(stock_quote, true = _alert_down?, _alert_up?, alarm) do
+    IO.puts("#{format_quote(alarm.ticker, stock_quote)}, which is under #{alarm.down_price}")
     play_sound(:down_sound)
 
     alarm
@@ -116,8 +116,8 @@ defmodule StockAlarm.CLI do
     |> wait_before_next_alarm
   end
 
-  def sound_alarm_if(current_price, false = _alert_down?, true = _alert_up?, alarm) do
-    IO.puts("#{alarm.ticker} is worth #{current_price}, which is OVER #{alarm.up_price}")
+  def sound_alarm_if(stock_quote, false = _alert_down?, true = _alert_up?, alarm) do
+    IO.puts("#{format_quote(alarm.ticker, stock_quote)}, which is OVER #{alarm.up_price}")
     play_sound(:up_sound)
 
     alarm
@@ -125,9 +125,34 @@ defmodule StockAlarm.CLI do
     |> wait_before_next_alarm
   end
 
-  def sound_alarm_if(current_price, false = _alert_down?, false = _alert_up?, alarm) do
-    IO.puts("#{alarm.ticker} is worth #{current_price}")
+  def sound_alarm_if(stock_quote, false = _alert_down?, false = _alert_up?, alarm) do
+    IO.puts(format_quote(alarm.ticker, stock_quote))
     wait_before_next_alarm(alarm)
+  end
+
+  # "14:32 - AAPL is worth 212.43 (+0.63%)", price green on gain, red on loss.
+  defp format_quote(ticker, %{price: price, change_percent: percent}) do
+    "#{timestamp()} - #{ticker} is worth #{colorize(price, percent)}#{percent_suffix(percent)}"
+  end
+
+  defp colorize(price, nil), do: "#{price}"
+
+  defp colorize(price, percent) do
+    color = if percent < 0, do: IO.ANSI.red(), else: IO.ANSI.green()
+    "#{color}#{price}#{IO.ANSI.reset()}"
+  end
+
+  defp percent_suffix(nil), do: ""
+
+  defp percent_suffix(percent) do
+    sign = if percent < 0, do: "", else: "+"
+    " (#{sign}#{:erlang.float_to_binary(percent, decimals: 2)}%)"
+  end
+
+  defp timestamp do
+    "Europe/Paris"
+    |> DateTime.now!(Tz.TimeZoneDatabase)
+    |> Calendar.strftime("%H:%M")
   end
 
   def wait_before_next_alarm(alarm) do
